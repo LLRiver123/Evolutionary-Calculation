@@ -1,0 +1,10 @@
+
+cbus_env/
+homberger_1000_customer_instances/
+pdp_100/
+_pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.csv
+*.json
