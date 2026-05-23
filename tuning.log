@@ -1,0 +1,13 @@
+2026-05-23 15:05:56,555 - INFO - 
+======================================================================
+2026-05-23 15:05:56,563 - INFO - Tuning: hust10
+2026-05-23 15:05:56,564 - INFO - ======================================================================
+2026-05-23 15:05:56,565 - INFO - Loaded: n=10, k=6, matrix_size=21x21
+2026-05-23 15:05:56,566 - INFO - 
+[1/2] Tuning OR-Tools...
+2026-05-23 15:05:56,566 - INFO - Starting OR-Tools tuning: 60 configurations
+2026-05-23 15:05:56,566 - INFO - [1/60] Testing: AUTOMATIC + AUTOMATIC + time_mult=0.5
+2026-05-23 15:05:56,621 - INFO - [2/60] Testing: AUTOMATIC + AUTOMATIC + time_mult=0.7
+2026-05-23 15:05:56,652 - INFO - [3/60] Testing: AUTOMATIC + AUTOMATIC + time_mult=1.0
+2026-05-23 15:05:56,683 - INFO - [4/60] Testing: AUTOMATIC + GUIDED_LOCAL_SEARCH + time_mult=0.5
+2026-05-23 15:06:06,690 - INFO - [5/60] Testing: AUTOMATIC + GUIDED_LOCAL_SEARCH + time_mult=0.7

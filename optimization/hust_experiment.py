@@ -11,6 +11,11 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple
 
+# Setup paths - add parent directory (root), framework, and solvers
+root_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(root_dir))
+sys.path.insert(0, str(root_dir / "framework"))
+sys.path.insert(0, str(root_dir / "solvers"))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import read_cbus_file, calculate_route_cost, validate_route
@@ -22,6 +27,16 @@ from ortools.constraint_solver import routing_enums_pb2, pywrapcp
 
 
 class HUSTExperimentRunner:
+    DEFAULT_ORTOOLS_CONFIG = {
+        "first_solution_strategy": "PARALLEL_CHEAPEST_INSERTION",
+        "local_search_metaheuristic": "AUTOMATIC"
+    }
+    
+    DEFAULT_ALNS_CONFIG = {
+        "iterations": 200,
+        "cooling_rate": 0.95,
+        "initial_temp": 100.0
+    }
     def __init__(self, output_dir: str = None):
         if output_dir is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -33,6 +48,53 @@ class HUSTExperimentRunner:
             'timestamp': datetime.now().isoformat(),
             'instances': {}
         }
+        
+        self.ortools_config = self.DEFAULT_ORTOOLS_CONFIG.copy()
+        self.alns_config = self.DEFAULT_ALNS_CONFIG.copy()
+        self.tuning_params = None
+
+    @property
+    def tuning_params(self):
+        return self._tuning_params
+
+    @tuning_params.setter
+    def tuning_params(self, data):
+        self._tuning_params = data
+        if data:
+            self._parse_best_params(data)
+
+    def _parse_best_params(self, data):
+        """Tự động tìm tham số có cost thấp nhất dựa trên bài toán KHÓ NHẤT"""
+        best_ortools_cost = float('inf')
+        best_alns_cost = float('inf')
+        
+        # Tìm instance lớn nhất (vd: hust1000 > hust5) để làm hệ quy chiếu
+        try:
+            hardest_instance = sorted(data.keys(), key=lambda k: int(''.join(filter(str.isdigit, k))))[-1]
+        except:
+            hardest_instance = list(data.keys())[-1]
+            
+        print(f"\n[DEBUG] Đang phân tích bộ tham số tối ưu từ bài toán khó nhất: {hardest_instance}")
+        results = data[hardest_instance]
+        
+        # Phân tích OR-Tools
+        for ort in results.get('ortools', []):
+            if ort.get('valid') and ort.get('cost', float('inf')) < best_ortools_cost:
+                best_ortools_cost = ort['cost']
+                self.ortools_config['first_solution_strategy'] = str(ort['strategy']).split('.')[-1]
+                self.ortools_config['local_search_metaheuristic'] = str(ort['metaheuristic']).split('.')[-1]
+        
+        # Phân tích ALNS
+        for alns in results.get('alns', []):
+            if alns.get('valid') and alns.get('cost', float('inf')) < best_alns_cost:
+                best_alns_cost = alns['cost']
+                self.alns_config['iterations'] = alns.get('iterations', 200)
+                self.alns_config['cooling_rate'] = alns.get('cooling_rate', 0.95)
+                self.alns_config['initial_temp'] = alns.get('initial_temp', 100.0)
+                
+        print(f"[INFO] Đã nạp tham số tối ưu:")
+        print(f"  - OR-Tools: {self.ortools_config['first_solution_strategy']}")
+        print(f"  - ALNS: iter={self.alns_config['iterations']}, cool={self.alns_config['cooling_rate']}")
     
     def run_ortools_optimized(self, n: int, k: int, cost_matrix: List[List[int]], 
                               time_limit: float = 30.0) -> Tuple[List[int], float]:
@@ -87,9 +149,23 @@ class HUSTExperimentRunner:
             solver.Add(order_dimension.CumulVar(pickup) < order_dimension.CumulVar(delivery))
 
         # Optimized parameters
+       # Optimized parameters dynamically loaded
         search_params = pywrapcp.DefaultRoutingSearchParameters()
-        search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
-        search_params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        
+        strategy_val = self.ortools_config.get("first_solution_strategy", "PARALLEL_CHEAPEST_INSERTION")
+        meta_val = self.ortools_config.get("local_search_metaheuristic", "AUTOMATIC")
+        
+        # FIX: Xử lý linh hoạt cả khi JSON trả về Số (Enum ID) hoặc Chữ (String)
+        if str(strategy_val).isdigit():
+            search_params.first_solution_strategy = int(strategy_val)
+        else:
+            search_params.first_solution_strategy = getattr(routing_enums_pb2.FirstSolutionStrategy, str(strategy_val))
+            
+        if str(meta_val).isdigit():
+            search_params.local_search_metaheuristic = int(meta_val)
+        else:
+            search_params.local_search_metaheuristic = getattr(routing_enums_pb2.LocalSearchMetaheuristic, str(meta_val))
+        
         search_params.time_limit.FromSeconds(int(time_limit))
         search_params.use_full_propagation = True
         search_params.lns_time_limit.FromSeconds(max(1, int(time_limit / 6)))
@@ -122,10 +198,11 @@ class HUSTExperimentRunner:
         start_time = time.time()
         
         # Optimized parameters for ALNS
-        iterations = 300
-        cooling_rate = 0.95
-        initial_temp = 150.0
         
+        iterations = self.alns_config.get("iterations", 300)
+        cooling_rate = self.alns_config.get("cooling_rate", 0.95)
+        initial_temp = self.alns_config.get("initial_temp", 150.0)
+
         route = heuristic.initial_solution(n, k, cost_matrix)
         best_route = route[:]
         best_cost = heuristic.calc_route_cost(route, cost_matrix)
@@ -146,6 +223,7 @@ class HUSTExperimentRunner:
             for req in removed_reqs:
                 P, D = req, req + n
                 
+                # 1. Tính toán mảng tải trọng hiện tại
                 loads = [0] * len(full_route)
                 curr_load = 0
                 for idx in range(1, len(full_route) - 1):
@@ -154,22 +232,30 @@ class HUSTExperimentRunner:
                     else: curr_load -= 1
                     loads[idx] = curr_load
                 
+                # 2. Tìm vị trí bị chặn do đầy tải (SỬA: dùng >= k thay vì == k cho an toàn)
                 next_full = [len(full_route)] * len(full_route)
                 last_full = len(full_route)
                 for idx in range(len(full_route) - 1, -1, -1):
-                    if loads[idx] == k:
+                    if loads[idx] >= k:
                         last_full = idx
                     next_full[idx] = last_full
                 
                 best_req_cost = float('inf')
                 best_x, best_y = -1, -1
                 
+                # 3. Tìm vị trí chèn tốt nhất
                 for x in range(1, len(full_route)):
+                    # SỬA QUAN TRỌNG NHẤT: Bỏ qua nếu vị trí trước x đã đầy tải (Tránh nhồi nhét)
+                    if loads[x-1] >= k:
+                        continue
+                        
                     prev_x = full_route[x-1]
                     node_x = full_route[x]
                     cost_P = cost_matrix[prev_x][P] + cost_matrix[P][node_x] - cost_matrix[prev_x][node_x]
                     
+                    # SỬA: Thêm +1 để quét được vị trí chặn cuối cùng
                     max_y = min(len(full_route), next_full[x] + 1)
+                    
                     for y in range(x, max_y):
                         if x == y:
                             cost = cost_matrix[prev_x][P] + cost_matrix[P][D] + cost_matrix[D][node_x] - cost_matrix[prev_x][node_x]
@@ -182,12 +268,18 @@ class HUSTExperimentRunner:
                             best_req_cost = cost
                             best_x, best_y = x, y
                 
-                if best_x == best_y:
-                    full_route.insert(best_x, D)
-                    full_route.insert(best_x, P)
+                # 4. Thực hiện chèn an toàn
+                if best_x != -1 and best_y != -1:
+                    if best_x == best_y:
+                        full_route.insert(best_x, D)
+                        full_route.insert(best_x, P)
+                    else:
+                        full_route.insert(best_y, D)
+                        full_route.insert(best_x, P)
                 else:
-                    full_route.insert(best_y, D)
-                    full_route.insert(best_x, P)
+                    # Fallback dự phòng (rất hiếm khi vào nhánh này nếu logic đúng)
+                    full_route.insert(1, D)
+                    full_route.insert(1, P)
             
             repaired_route = full_route[1:-1]
             new_cost = heuristic.calc_route_cost(repaired_route, cost_matrix)
@@ -392,16 +484,37 @@ class HUSTExperimentRunner:
 
 
 def main():
-    data_dir = 'd:\\Evolutionary Calculation\\cbus_output_20260517_222958'
+    # Get data directory path relative to script location
+    root_dir = Path(__file__).parent.parent
+    data_dir = root_dir / 'data' / 'cbus_output_20260517_222958'
+    
+    if not data_dir.exists():
+        print(f"Error: Data directory not found: {data_dir}")
+        print(f"\nAvailable data directories in {root_dir / 'data'}:")
+        data_parent = root_dir / 'data'
+        if data_parent.exists():
+            for item in data_parent.iterdir():
+                if item.is_dir():
+                    print(f"  - {item.name}")
+        sys.exit(1)
     
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', '--time', type=float, default=30.0, help='Time limit per solver')
     parser.add_argument('-o', '--output', default=None, help='Output directory')
+    parser.add_argument('--params', default=None, help='Path to tuning results JSON file')
     args = parser.parse_args()
     
+    # Đọc tham số tuning nếu có
+    tuning_params = None
+    if args.params and os.path.exists(args.params):
+        with open(args.params, 'r') as f:
+            tuning_params = json.load(f)
+            
     runner = HUSTExperimentRunner(output_dir=args.output)
-    runner.run_all_hust(data_dir, time_limit=args.time)
+    # Truyền params vào runner
+    runner.tuning_params = tuning_params 
+    runner.run_all_hust(str(data_dir), time_limit=args.time)
 
 
 if __name__ == "__main__":

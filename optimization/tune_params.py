@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import multiprocessing as mp
 
+# Setup paths - add root, framework, and solvers
+root_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(root_dir))
+sys.path.insert(0, str(root_dir / "framework"))
+sys.path.insert(0, str(root_dir / "solvers"))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import read_cbus_file, calculate_route_cost, validate_route
@@ -68,10 +73,11 @@ class ParameterTuner:
         metaheuristic_names = [s for s in dir(routing_enums_pb2.LocalSearchMetaheuristic) if not s.startswith('_')]
         
         # Sample subset for quick tuning
+        # Note: Use only strategies that are confirmed to exist in OR-Tools
+        # These are the most reliable and commonly available strategies
         strategies_to_try = [
             routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION,
             routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC,
-            routing_enums_pb2.FirstSolutionStrategy.NEAREST_NEIGHBOR,
         ]
         
         metaheuristics_to_try = [
@@ -323,7 +329,7 @@ class ParameterTuner:
         
         files = sorted([f for f in os.listdir(data_dir) if f.startswith('hust') and f.endswith('.txt')])
         
-        for file_name in files[:2]:  # Quick test: first 2 files
+        for file_name in files[:5]:  # Quick test: first 2 files
             instance_name = file_name.replace('.txt', '')
             file_path = os.path.join(data_dir, file_name)
             
@@ -366,11 +372,27 @@ class ParameterTuner:
 
 
 def main():
-    data_dir = 'd:\\Evolutionary Calculation\\cbus_output_20260517_222958'
+    # Get data directory path relative to script location
+    root_dir = Path(__file__).parent.parent
+    data_dir = root_dir / 'data' / 'cbus_output_20260517_222958'
     
-    tuner = ParameterTuner()
-    tuner.run_tuning(data_dir, time_limit=20.0)
+    if not data_dir.exists():
+        print(f"Error: Data directory not found: {data_dir}")
+        print(f"\nAvailable data directories in {root_dir / 'data'}:")
+        data_parent = root_dir / 'data'
+        if data_parent.exists():
+            for item in data_parent.iterdir():
+                if item.is_dir():
+                    print(f"  - {item.name}")
+        sys.exit(1)
+    
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-t', '--time', type=float, default=20.0, help='Time limit per solver')
+    args = parser.parse_args()
 
+    tuner = ParameterTuner()
+    tuner.run_tuning(str(data_dir), time_limit=args.time)
 
 if __name__ == "__main__":
     main()

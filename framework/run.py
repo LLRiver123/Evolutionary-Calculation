@@ -8,38 +8,24 @@ import sys
 import argparse
 from pathlib import Path
 
-# Ensure we can import modules
-sys.path.insert(0, str(Path(__file__).parent))
+# Fix lỗi Import: add cả thư mục cha ngoài cùng (để import được framework và solvers)
+root_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(root_dir))
 
-from experiment import ExperimentRunner
+from framework.experiment import ExperimentRunner
+# Đưa utils lên đầu
+from solvers.utils import read_cbus_file
 
 
 def main():
-    # Detect data directory - adjust for new folder structure
-    root_dir = Path(__file__).parent.parent
-    data_dir = root_dir / 'data' / 'cbus_output_20260517_222958'
-    
-    if not os.path.exists(data_dir):
-        data_dir = root_dir / 'data'
-    
-    if not os.path.exists(data_dir):
-        print(f"Error: Cannot find data directory")
-        sys.exit(1)
-    
     parser = argparse.ArgumentParser(
         description='CBUS Solver Comparison',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python run.py                              # All instances, 30s per solver
-  python run.py -t 60                        # All instances, 60s per solver
-  python run.py -i lc101_cbus                # Single instance
-  python run.py -i lc101_cbus,lc102_cbus    # Multiple instances
-  python run.py -o results_exp1              # Save to specific output dir
-        """
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    parser.add_argument('-t', '--time', type=float, default=30.0,
+    parser.add_argument('-d', '--data-dir', default=None,
+                        help='Data directory path. Nếu không truyền sẽ tự tìm thư mục cbus_output* mới nhất')
+    parser.add_argument('-t', '--time', type=float, default=None,
                         help='Time limit per solver in seconds (default: 30)')
     parser.add_argument('-i', '--instances', default=None,
                         help='Run specific instances (comma-separated, without .txt)')
@@ -49,51 +35,58 @@ Examples:
                         help='Run quick test on first 3 instances')
     
     args = parser.parse_args()
-    
-    runner = ExperimentRunner(output_dir=args.output, time_limit=args.time)
-    
-    if args.quick:
-        # Run quick test on first 3 instances
-        print("\n🚀 Running quick test (3 instances, 10s per solver)...")
-        runner.time_limit = 10.0
-        
-        # Find first 3 instances
-        files = sorted([f for f in os.listdir(data_dir) if f.endswith('.txt')])[:3]
-        from utils import read_cbus_file
-        for f in files:
+
+    # 1. Logic tìm data_dir thông minh và an toàn hơn
+    if args.data_dir:
+        data_dir = Path(args.data_dir)
+    else:
+        # Tìm thư mục dạng cbus_output_* trong data/
+        import glob
+        data_parent = root_dir / 'data'
+        possible_dirs = sorted(glob.glob(str(data_parent / 'cbus_output_*')))
+        if possible_dirs:
+            data_dir = Path(possible_dirs[-1]) # Lấy thư mục mới nhất
+        else:
+            data_dir = data_parent # Cực chẳng đã mới dùng fallback
             
+    if not os.path.exists(data_dir):
+        print(f"Error: Cannot find data directory at {data_dir}")
+        sys.exit(1)
+
+    # 2. Logic set time limit an toàn
+    time_limit = args.time if args.time is not None else (10.0 if args.quick else 30.0)
+    
+    runner = ExperimentRunner(output_dir=args.output, time_limit=time_limit)
+    
+    # Hàm helper nội bộ thay vì lặp code
+    def process_and_save(file_names):
+        for f in file_names:
             file_path = os.path.join(data_dir, f)
+            if not os.path.exists(file_path):
+                print(f"⚠️  Instance not found: {f}")
+                continue
             instance_name = f.replace('.txt', '')
             n, k, cost_matrix = read_cbus_file(file_path)
+            
+            # Ghi nhận kết quả
             result = runner.run_instance(instance_name, n, k, cost_matrix)
             runner.results['instances'][instance_name] = result
+            
+        runner._save_results() # Tạm chấp nhận gọi hàm internal nếu không tiện sửa ruột ExperimentRunner
+
+    # 3. Phân luồng chạy
+    if args.quick:
+        print(f"\n🚀 Running quick test (3 instances, {time_limit}s per solver)...")
+        files = sorted([f for f in os.listdir(data_dir) if f.endswith('.txt')])[:3]
+        process_and_save(files)
         
-        runner._save_results()
-    
     elif args.instances:
-        # Run specific instances
-        instance_names = args.instances.split(',')
-        print(f"\n🎯 Running {len(instance_names)} selected instance(s)...")
+        instance_names = [name.strip() + '.txt' for name in args.instances.split(',')]
+        print(f"\n🎯 Running {len(instance_names)} selected instance(s) ({time_limit}s per solver)...")
+        process_and_save(instance_names)
         
-        from utils import read_cbus_file
-        
-        for instance_name in instance_names:
-            instance_name = instance_name.strip()
-            file_path = os.path.join(data_dir, f"{instance_name}.txt")
-            
-            if not os.path.exists(file_path):
-                print(f"⚠️  Instance not found: {instance_name}")
-                continue
-            
-            n, k, cost_matrix = read_cbus_file(file_path)
-            result = runner.run_instance(instance_name, n, k, cost_matrix)
-            runner.results['instances'][instance_name] = result
-        
-        runner._save_results()
-    
     else:
-        # Run all instances
-        print(f"\n📊 Running all instances ({args.time}s per solver)...")
+        print(f"\n📊 Running all instances ({time_limit}s per solver)...")
         runner.run_all_instances(data_dir)
 
 

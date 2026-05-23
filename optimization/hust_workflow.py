@@ -14,13 +14,13 @@ from pathlib import Path
 from datetime import datetime
 
 
-def run_command(cmd, description):
+def run_command(cmd, description, cwd=None):
     """Run a command and report status"""
     print(f"\n{'='*70}")
     print(f"📊 {description}")
     print(f"{'='*70}\n")
     
-    result = subprocess.run(cmd, shell=True)
+    result = subprocess.run(cmd, shell=True, cwd=cwd)
     
     if result.returncode != 0:
         print(f"\n❌ Command failed: {description}")
@@ -41,10 +41,18 @@ def main():
     
     args = parser.parse_args()
     
-    data_dir = 'd:\\Evolutionary Calculation\\cbus_output_20260517_222958'
+    # Get path relative to script location
+    script_dir = Path(__file__).parent.parent  # Go up from optimization/ to root
+    data_dir = script_dir / 'data' / 'cbus_output_20260517_222958'
     
-    if not os.path.exists(data_dir):
+    if not data_dir.exists():
         print(f"Error: Data directory not found: {data_dir}")
+        print(f"\nAvailable data directories in {script_dir / 'data'}:")
+        data_parent = script_dir / 'data'
+        if data_parent.exists():
+            for item in data_parent.iterdir():
+                if item.is_dir():
+                    print(f"  - {item.name}")
         sys.exit(1)
     
     print(f"""
@@ -52,7 +60,7 @@ def main():
 ║                  HUST BENCHMARK WORKFLOW                            ║
 ║                                                                      ║
 ║  Configuration:                                                      ║
-║  - Data directory: {data_dir}
+║  - Data directory: {str(data_dir)}
 ║  - Time limit: {args.time}s per solver
 ║  - Steps: {args.step}
 ║                                                                      ║
@@ -61,11 +69,16 @@ def main():
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
+    # Get path to optimization directory
+    opt_dir = Path(__file__).parent
+    
     # Step 1: Parameter Tuning (optional)
     if args.step in ['all', 'tune']:
+        # Dùng sys.executable thay vì 'python' cứng và truyền args.time
         success = run_command(
-            'python tune_params.py',
-            'Parameter Tuning - Finding optimal solver configurations'
+            f'"{sys.executable}" tune_params.py -t {args.time}',
+            'Parameter Tuning - Finding optimal solver configurations',
+            cwd=str(opt_dir)
         )
         
         if not success and args.step == 'tune':
@@ -78,10 +91,15 @@ def main():
         else:
             output_dir = f"hust_results_{timestamp}"
         
-        cmd = f"python hust_experiment.py -t {args.time} -o {output_dir}"
+        import glob
+        tuning_files = sorted(glob.glob(str(opt_dir / 'tuning_results_*/tuning_results.json')))
+        params_arg = f' --params "{tuning_files[-1]}"' if tuning_files else ""
+        
+        cmd = f'"{sys.executable}" hust_experiment.py -t {args.time} -o "{output_dir}"{params_arg}'
         success = run_command(
             cmd,
-            f'Running HUST Experiments - All instances with {args.time}s per solver'
+            f'Running HUST Experiments - All instances with {args.time}s per solver',
+            cwd=str(opt_dir)
         )
         
         if not success:
@@ -94,7 +112,8 @@ def main():
     else:
         # Find latest results
         import glob
-        results_files = sorted(glob.glob('hust_results_*/hust_results.json'))
+        search_pattern = str(opt_dir / 'hust_results_*' / 'hust_results.json')
+        results_files = sorted(glob.glob(search_pattern))
         if not results_files:
             print("Error: No results found. Run experiments first.")
             sys.exit(1)
@@ -108,10 +127,10 @@ def main():
             sys.exit(1)
         
         success = run_command(
-            f"python visualize_hust.py {results_file}",
-            f'Generating Visualizations - Creating charts and analysis'
+            f'"{sys.executable}" visualize_hust.py "{results_file}"',
+            f'Generating Visualizations - Creating charts and analysis',
+            cwd=str(opt_dir)
         )
-        
         if not success:
             print("\n⚠️  Visualization had some issues")
     

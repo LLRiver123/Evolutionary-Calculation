@@ -120,14 +120,16 @@ def alns_optimize(route, c, n, k_cap, iterations=150, time_limit=None):
             best_x, best_y = -1, -1
             
             for x in range(1, len(full_route)):
-                if loads[x-1] >= k_cap:          # load TRƯỚC vị trí x đã đầy
+                if loads[x-1] >= k_cap:          
                     continue
+                
                 prev_x = full_route[x-1]
                 node_x = full_route[x]
                 
                 cost_P = c[prev_x][P] + c[P][node_x] - c[prev_x][node_x]
                 
-                max_y = min(len(full_route), next_full[x]) 
+                # FIX 1: Thêm + 1 để range() bao phủ được vị trí chặn cuối cùng
+                max_y = min(len(full_route), next_full[x] + 1) 
                 
                 for y in range(x, max_y):
                     if x == y:
@@ -140,13 +142,21 @@ def alns_optimize(route, c, n, k_cap, iterations=150, time_limit=None):
                     if cost < best_req_cost:
                         best_req_cost = cost
                         best_x, best_y = x, y
-                        
-            if best_x == best_y:
-                full_route.insert(best_x, D)
-                full_route.insert(best_x, P)
+            
+            # FIX 2: Bắt buộc phải có điều kiện bảo vệ tránh chèn bừa bãi khi best_x = -1
+            if best_x != -1 and best_y != -1:
+                if best_x == best_y:
+                    full_route.insert(best_x, D)
+                    full_route.insert(best_x, P)
+                else:
+                    # Chú ý logic index: insert y trước (vì y >= x), sau đó insert x 
+                    # để không làm lệch index của y
+                    full_route.insert(best_y, D)
+                    full_route.insert(best_x, P)
             else:
-                full_route.insert(best_y, D)
-                full_route.insert(best_x, P)
+                # Fallback an toàn cực đoan: Chèn ngay sau Depot nếu không tìm được cách (rất hiếm khi xảy ra nếu max_y fix đúng)
+                full_route.insert(1, D)
+                full_route.insert(1, P)
                 
         repaired_route = full_route[1:-1]
         new_cost = calc_route_cost(repaired_route, c)
